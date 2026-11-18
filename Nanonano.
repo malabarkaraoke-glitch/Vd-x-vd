@@ -1,0 +1,1772 @@
+--[[ FALL'S DOMINION | Violence District | UI + AUTO PARRY via TRIG + Yuji Skillcheck + Save Config ]]
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local GuiService = game:GetService("GuiService")
+local Lighting = game:GetService("Lighting")
+local CollectionService = game:GetService("CollectionService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local HttpService = game:GetService("HttpService")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local G = (getgenv and getgenv()) or _G
+
+--==============================================================
+-- BERSIHKAN VERSI LAMA
+--==============================================================
+if G.MengDaggerCleanup then pcall(G.MengDaggerCleanup) end
+for _, n in ipairs({"MengHub_VD", "FallsDominion_VD", "FallsDominion_DBG"}) do
+    pcall(function() local o = CoreGui:FindFirstChild(n) if o then o:Destroy() end end)
+    pcall(function() local o = PlayerGui:FindFirstChild(n) if o then o:Destroy() end end)
+end
+for _, n in ipairs({"MengHub_TRIG", "FallsDominion_TRIG"}) do
+    pcall(function() local o = PlayerGui:FindFirstChild(n) if o then o:Destroy() end end)
+end
+
+local allConns, uiConns, trigConns = {}, {}, {}
+local function track(c) allConns[#allConns + 1] = c return c end
+local function trackUI(c) uiConns[#uiConns + 1] = c return c end
+local function trackTrig(c) trigConns[#trigConns + 1] = c return c end
+local function DisconnectList(list)
+    for _, c in ipairs(list) do pcall(function() c:Disconnect() end) end
+end
+
+--==============================================================
+-- ASSETS (BG & PP)
+--==============================================================
+local BG_URL = "https://res.cloudinary.com/ugli1fcb/image/upload/v1789449584/b722bc9c3ae331c086afcba9fb43c0dd.jpg"
+local PP_URL = "https://res.cloudinary.com/ugli1fcb/image/upload/v1792931712/51cff4f1b602b7220d4eaeccf558ffbf.jpg"
+local CREATOR_URL = PP_URL -- ganti dengan URL foto profil Fall kalau mau
+local BG_ASSET, PP_ASSET, CREATOR_ASSET = nil, nil, nil
+pcall(function()
+    if writefile and isfile and getcustomasset then
+        if not isfile("menghub_bg.png") then writefile("menghub_bg.png", game:HttpGet(BG_URL)) end
+        BG_ASSET = getcustomasset("menghub_bg.png")
+        if not isfile("menghub_pp.png") then writefile("menghub_pp.png", game:HttpGet(PP_URL)) end
+        PP_ASSET = getcustomasset("menghub_pp.png")
+        if CREATOR_URL == PP_URL then
+            CREATOR_ASSET = PP_ASSET
+        else
+            if not isfile("fall_creator.png") then writefile("fall_creator.png", game:HttpGet(CREATOR_URL)) end
+            CREATOR_ASSET = getcustomasset("fall_creator.png")
+        end
+    end
+end)
+
+--==============================================================
+-- CONFIG
+--==============================================================
+local Config = {
+    -- Auto Parry (via TRIG)
+    AutoParryEnabled = false,
+    ParryRadius = 12,
+    AreaEnabled = true,
+    FaceEnabled = true,       -- putar karakter menghadap killer sebelum parry (juga kalau killer di belakang)
+    FaceCamEnabled = true,    -- kamera ikut menghadap killer
+    PressMode = "trig",       -- "trig" = sentuh TRIG | "sinyal" = fire sinyal tombol game + sentuh TRIG
+    InsetMode = "auto",       -- "auto" | "nol" | "xy"
+    TrigShow = true,
+    TrigSize = 60,
+    TrigLocked = false,
+    -- Survivor / Visual
+    AutoSkillEnabled = false, ESPEnabled = false, FullbrightEnabled = false, NoclipEnabled = false,
+    GenEnabled = false,
+}
+
+-- UI refs (dibangun ulang otomatis kalau terhapus)
+local ScreenGui, TrigGui, Main, FloatBtn, mainScale, triggerTarget
+local TrigPosU = nil
+
+--==============================================================
+-- SAVE / LOAD CONFIG
+--==============================================================
+local CONFIG_FILE = "FallConfig.json"
+local SAVE_KEYS = {
+    "AutoParryEnabled", "ParryRadius", "AreaEnabled", "FaceEnabled", "FaceCamEnabled", "PressMode", "InsetMode",
+    "TrigShow", "TrigSize", "TrigLocked",
+    "AutoSkillEnabled", "ESPEnabled", "FullbrightEnabled", "NoclipEnabled", "GenEnabled",
+}
+local RANGE_KEYS = {ParryRadius = {4, 40}, TrigSize = {24, 160}}
+
+local function SaveConfig()
+    if not writefile then return false, "writefile tidak didukung" end
+    local data = {}
+    for _, k in ipairs(SAVE_KEYS) do data[k] = Config[k] end
+    pcall(function() TrigPosU = triggerTarget.Position end)
+    if TrigPosU then
+        data.TrigPos = {TrigPosU.X.Scale, TrigPosU.X.Offset, TrigPosU.Y.Scale, TrigPosU.Y.Offset}
+    end
+    local ok, err = pcall(function() writefile(CONFIG_FILE, HttpService:JSONEncode(data)) end)
+    return ok, err
+end
+
+local function LoadConfig()
+    if not (readfile and isfile) then return false, "readfile tidak didukung" end
+    local okE, exists = pcall(isfile, CONFIG_FILE)
+    if not okE or not exists then return false, "File belum ada" end
+    local ok, data = pcall(function() return HttpService:JSONDecode(readfile(CONFIG_FILE)) end)
+    if not ok or type(data) ~= "table" then return false, "File rusak" end
+    for _, k in ipairs(SAVE_KEYS) do
+        local v = data[k]
+        if v ~= nil and type(v) == type(Config[k]) then
+            local r = RANGE_KEYS[k]
+            if r then v = math.clamp(v, r[1], r[2]) end
+            if k == "PressMode" and v ~= "trig" and v ~= "sinyal" then v = Config[k] end
+            if k == "InsetMode" and v ~= "auto" and v ~= "nol" and v ~= "xy" then v = Config[k] end
+            Config[k] = v
+        end
+    end
+    local tp = data.TrigPos
+    if type(tp) == "table" and type(tp[1]) == "number" and type(tp[2]) == "number"
+        and type(tp[3]) == "number" and type(tp[4]) == "number" then
+        TrigPosU = UDim2.new(tp[1], tp[2], tp[3], tp[4])
+    end
+    return true
+end
+
+local autoLoaded = LoadConfig() -- otomatis muat setting terakhir saat execute
+
+--==============================================================
+-- TOAST
+--==============================================================
+local function ShowToast(title, text)
+    if not ScreenGui or not ScreenGui.Parent then return end
+    local Toast = Instance.new("Frame", ScreenGui)
+    Toast.Size = UDim2.new(0, 250, 0, 50)
+    Toast.Position = UDim2.new(0.5, -125, 0.1, 0)
+    Toast.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
+    Toast.BackgroundTransparency = 0.1
+    Toast.ZIndex = 9000
+    Instance.new("UICorner", Toast).CornerRadius = UDim.new(0, 8)
+
+    if BG_ASSET then
+        local bg = Instance.new("ImageLabel", Toast)
+        bg.Size = UDim2.new(1, 0, 1, 0)
+        bg.BackgroundTransparency = 1
+        bg.Image = BG_ASSET
+        bg.ScaleType = Enum.ScaleType.Crop
+        bg.ImageTransparency = 0.7
+        bg.ZIndex = 0
+        Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 8)
+    end
+
+    local TitleLbl = Instance.new("TextLabel", Toast)
+    TitleLbl.Size = UDim2.new(1, -10, 0, 20)
+    TitleLbl.Position = UDim2.new(0, 5, 0, 5)
+    TitleLbl.BackgroundTransparency = 1
+    TitleLbl.Text = title
+    TitleLbl.TextColor3 = Color3.fromRGB(255, 40, 64)
+    TitleLbl.Font = Enum.Font.GothamBold
+    TitleLbl.TextSize = 12
+    TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    TitleLbl.ZIndex = 2
+
+    local TextLbl = Instance.new("TextLabel", Toast)
+    TextLbl.Size = UDim2.new(1, -10, 0, 15)
+    TextLbl.Position = UDim2.new(0, 5, 0, 25)
+    TextLbl.BackgroundTransparency = 1
+    TextLbl.Text = text
+    TextLbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+    TextLbl.Font = Enum.Font.Gotham
+    TextLbl.TextSize = 10
+    TextLbl.TextXAlignment = Enum.TextXAlignment.Left
+    TextLbl.ZIndex = 2
+
+    task.delay(2.5, function() pcall(function() Toast:Destroy() end) end)
+end
+
+--==============================================================
+-- AUTO PARRY via TRIG (TRIG menggantikan sentuhan ke tombol parry game)
+--==============================================================
+local scriptRunning = true
+local UIS, VIM = UserInputService, VirtualInputManager
+local BTN_NAME = "Gui-mob" -- nama tombol parry di game (dipakai untuk mode SINYAL)
+
+local function lower(s) return string.lower(tostring(s or "")) end
+local function getHRP(pl)
+    local c = pl and pl.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+local function isKiller(pl)
+    local tn = pl.Team and lower(pl.Team.Name)
+    return tn ~= nil and string.find(tn, "killer", 1, true) ~= nil
+end
+
+-- bersihkan sisa cincin lama
+pcall(function()
+    local cam = Workspace.CurrentCamera
+    local o = cam and cam:FindFirstChild("ParryArea")
+    while o do o:Destroy() o = cam:FindFirstChild("ParryArea") end
+end)
+
+------------------------------------------------ GUI DEBUGGER (LOG, HIDDEN DEFAULT)
+local dbgGui = Instance.new("ScreenGui")
+dbgGui.Name = "FallsDominion_DBG"
+dbgGui.ResetOnSpawn = false
+dbgGui.DisplayOrder = 998
+dbgGui.Parent = PlayerGui
+
+local logFrame = Instance.new("ScrollingFrame")
+logFrame.Name = "LogFrame"
+logFrame.Size = UDim2.new(0, 300, 0, 200)
+logFrame.AnchorPoint = Vector2.new(1, 1)
+logFrame.Position = UDim2.new(1, -8, 1, -8)
+logFrame.BackgroundColor3 = Color3.new(0, 0, 0)
+logFrame.BackgroundTransparency = 0.5
+logFrame.BorderSizePixel = 0
+logFrame.Active = false
+logFrame.ScrollBarThickness = 2
+logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+logFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+logFrame.Parent = dbgGui
+Instance.new("UICorner", logFrame).CornerRadius = UDim.new(0, 8)
+local logLayout = Instance.new("UIListLayout")
+logLayout.SortOrder = Enum.SortOrder.LayoutOrder
+logLayout.Padding = UDim.new(0, 1)
+logLayout.Parent = logFrame
+local logPad = Instance.new("UIPadding")
+logPad.PaddingLeft = UDim.new(0, 4)
+logPad.PaddingRight = UDim.new(0, 18)
+logPad.PaddingTop = UDim.new(0, 2)
+logPad.Parent = logFrame
+
+local clearBtn = Instance.new("TextButton")
+clearBtn.Name = "ClearLog"
+clearBtn.Size = UDim2.new(0, 22, 0, 22)
+clearBtn.AnchorPoint = Vector2.new(1, 0)
+clearBtn.Position = UDim2.new(1, -10, 1, -206)
+clearBtn.BackgroundColor3 = Color3.fromRGB(170, 40, 40)
+clearBtn.Text = "X"
+clearBtn.TextColor3 = Color3.new(1, 1, 1)
+clearBtn.Font = Enum.Font.GothamBold
+clearBtn.TextSize = 13
+clearBtn.ZIndex = 5
+clearBtn.Parent = dbgGui
+Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0, 5)
+
+local diagBtn = Instance.new("TextButton")
+diagBtn.Size = UDim2.new(0, 44, 0, 22)
+diagBtn.AnchorPoint = Vector2.new(1, 0)
+diagBtn.Position = UDim2.new(1, -36, 1, -206)
+diagBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 170)
+diagBtn.Text = "DIAG"
+diagBtn.TextColor3 = Color3.new(1, 1, 1)
+diagBtn.Font = Enum.Font.GothamBold
+diagBtn.TextSize = 10
+diagBtn.ZIndex = 5
+diagBtn.Parent = dbgGui
+Instance.new("UICorner", diagBtn).CornerRadius = UDim.new(0, 5)
+
+local logVisible = false
+local logToggle = Instance.new("TextButton")
+logToggle.Size = UDim2.new(0, 54, 0, 26)
+logToggle.AnchorPoint = Vector2.new(1, 1)
+logToggle.TextColor3 = Color3.new(1, 1, 1)
+logToggle.Font = Enum.Font.GothamBold
+logToggle.TextSize = 12
+logToggle.ZIndex = 10
+logToggle.Parent = dbgGui
+Instance.new("UICorner", logToggle).CornerRadius = UDim.new(0, 6)
+
+local function applyLogVisibility()
+    logFrame.Visible = logVisible
+    clearBtn.Visible = logVisible
+    diagBtn.Visible = logVisible
+    if logVisible then
+        logToggle.Text = "HIDE"
+        logToggle.BackgroundColor3 = Color3.fromRGB(170, 40, 40)
+        logToggle.Position = UDim2.new(1, -8, 1, -236)
+    else
+        logToggle.Text = "LOG"
+        logToggle.BackgroundColor3 = Color3.fromRGB(40, 120, 40)
+        logToggle.Position = UDim2.new(1, -8, 1, -8)
+    end
+end
+applyLogVisibility()
+logToggle.MouseButton1Click:Connect(function()
+    logVisible = not logVisible
+    applyLogVisibility()
+end)
+
+local logLabels, logCount, MAX_LOG = {}, 0, 80
+local t0 = os.clock()
+
+local C_OK, C_WARN, C_ERR, C_INFO = Color3.new(0, 1, 0), Color3.new(1, 1, 0), Color3.new(1, 0, 0), Color3.new(1, 1, 1)
+local C_FORCE, C_DIAG = Color3.new(1, 0.5, 0), Color3.new(0.5, 0.7, 1)
+
+local function AddLog(text, color)
+    pcall(function()
+        logCount = logCount + 1
+        local l = Instance.new("TextLabel")
+        l.Name = "Log"
+        l.LayoutOrder = logCount
+        l.BackgroundTransparency = 1
+        l.Size = UDim2.new(1, 0, 0, 0)
+        l.AutomaticSize = Enum.AutomaticSize.Y
+        l.Font = Enum.Font.Code
+        l.TextSize = 11
+        l.TextWrapped = true
+        l.TextXAlignment = Enum.TextXAlignment.Left
+        l.TextYAlignment = Enum.TextYAlignment.Top
+        l.TextColor3 = color or Color3.new(1, 1, 1)
+        l.Text = string.format("%.2f %s", os.clock() - t0, tostring(text))
+        l.Parent = logFrame
+        logLabels[#logLabels + 1] = l
+        while #logLabels > MAX_LOG do
+            local first = table.remove(logLabels, 1)
+            if first then first:Destroy() end
+        end
+        task.spawn(function()
+            task.wait()
+            logFrame.CanvasPosition = Vector2.new(0, 1e5)
+        end)
+    end)
+end
+
+clearBtn.MouseButton1Click:Connect(function()
+    for _, l in ipairs(logLabels) do pcall(function() l:Destroy() end) end
+    logLabels = {}
+    for _, c in ipairs(logFrame:GetChildren()) do
+        if c:IsA("TextLabel") then c:Destroy() end
+    end
+end)
+
+------------------------------------------------ AUTO PARRY
+local PARRY_GAP = 0.05      -- jeda minimal antar parry (detik)
+local ANIM_MAX_TP = 0.5     -- animasi serangan yang masih dianggap baru (detik)
+local TOUCH_HOLD = 0.03     -- lama sentuhan sebelum Touch Up (detik)
+local DOUBLE_PRESS = false  -- tekan dua kali berurutan
+local lastParry = 0
+
+local attackAnims = {}
+for _, id in ipairs({
+    "110355011987939","121216847022485","139369275981139","117042998468241",
+    "133963973694098","113255068724446","74968262036854","118907603246885",
+    "78432063483146","122812055447896","78935059863801","105374834496520",
+    "129784271201071","132817836308238","111920872708571","138720291317243",
+    "115244153053858","117070354890871","106871536134254",
+    "127417297154354","129626174716003","135002183282373","93902163029544",
+    "104540716539347","98163597193511","125430111937587",
+    "77303734522729","127622545856523","108286715411226","87833180786200",
+    "110466971021611","129669521834246","84926129581106","81963230963908","81499468767530",
+    "73681849513551"
+}) do attackAnims["rbxassetid://" .. id] = true end
+
+-- ===== cari tombol game (dipakai mode SINYAL + verifikasi TRIG) =====
+local gameHitT, hookedBtn = 0, nil
+local function hookGameBtn(b)
+    if not b or b == hookedBtn then return end
+    hookedBtn = b
+    track(b.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+            gameHitT = os.clock()
+        end
+    end))
+end
+
+local btnObj, btnT, btnFoundLast = nil, 0, nil
+local function gc(sig)
+    if not getconnections then return {} end
+    local ok, l = pcall(getconnections, sig)
+    return (ok and type(l) == "table") and l or {}
+end
+local function shown(o)
+    while o and o ~= PlayerGui do
+        if o:IsA("GuiObject") and not o.Visible then return false end
+        if o:IsA("ScreenGui") and not o.Enabled then return false end
+        o = o.Parent
+    end
+    return true
+end
+local function usable(b)
+    if not (b and b.Parent) then return false end
+    if not shown(b) then return false end
+    local s = b.AbsoluteSize
+    return s.X >= 4 and s.Y >= 4
+end
+local function scanBtn()
+    btnT = os.clock()
+    local best, bs
+    for _, d in ipairs(PlayerGui:GetDescendants()) do
+        if d.Name == BTN_NAME and d:IsA("GuiButton") and not d:FindFirstAncestor("FallsDominion_TRIG") then
+            local score = usable(d) and 100 or 0
+            for _, sn in ipairs({"MouseButton1Click", "Activated", "MouseButton1Down"}) do
+                local ok, sig = pcall(function() return d[sn] end)
+                if ok and sig then score = score + #gc(sig) * 10 end
+            end
+            if not bs or score > bs then best, bs = d, score end
+        end
+    end
+    btnObj = best
+    hookGameBtn(best)
+    local found = usable(best)
+    if found ~= btnFoundLast then
+        btnFoundLast = found
+        AddLog(found and ("[SYS] Tombol '" .. BTN_NAME .. "' ditemukan.")
+            or ("[WARN] Tombol '" .. BTN_NAME .. "' tidak ketemu / tidak terlihat."), found and C_OK or C_WARN)
+    end
+end
+local function findBtn()
+    if usable(btnObj) then return btnObj end
+    if os.clock() - btnT > 1 then pcall(scanBtn) end
+    return usable(btnObj) and btnObj or nil
+end
+local function fireSignals(b)
+    local groups = {{"Activated"}, {"MouseButton1Click"}, {"MouseButton1Down", "MouseButton1Up"}}
+    for _, grp in ipairs(groups) do
+        local n = 0
+        for _, nm in ipairs(grp) do
+            local ok, sig = pcall(function() return b[nm] end)
+            if ok and sig then
+                for _, c in ipairs(gc(sig)) do
+                    if pcall(function() c:Fire() end) then n = n + 1 end
+                end
+            end
+        end
+        if n > 0 then return n end
+    end
+    return 0
+end
+
+-- ===== Sentuhan: satu ID tetap; Touch Up pasti dikirim =====
+local TAP_ID = 8823
+local tapHeld, tapX, tapY, tapT, tapGen = false, 0, 0, 0, 0
+local activeToken = 0
+
+local function releaseTouch(reason)
+    if tapHeld then
+        tapHeld = false
+        local ok, err = pcall(function() VIM:SendTouchEvent(TAP_ID, 2, tapX, tapY) end)
+        if not ok then
+            AddLog("[ERROR] " .. tostring(err), C_ERR)
+        elseif reason == "paksa" then
+            AddLog("[WARN] Touch nyangkut! Memaksa lepas...", C_FORCE)
+        elseif reason == "normal" then
+            AddLog("[PARRY] Berhasil! TouchUp terkirim.", C_OK)
+        end
+    end
+end
+
+local function touchDown(x, y)
+    releaseTouch()
+    tapX, tapY = x, y
+    if pcall(function() VIM:SendTouchEvent(TAP_ID, 0, x, y) end) then
+        tapHeld = true
+        tapT = os.clock()
+        tapGen = tapGen + 1
+        local g = tapGen
+        task.delay(TOUCH_HOLD, function()
+            if tapHeld and tapGen == g then releaseTouch("normal") end
+        end)
+        return true
+    end
+    return false
+end
+
+-- tekan lewat TRIG: sentuh titik tengah TRIG; TRIG dibuat tidak Active sesaat agar tap tembus ke tombol game
+local function pressViaTrig()
+    if not triggerTarget or not triggerTarget.Parent then return false end
+    local p = triggerTarget.AbsolutePosition + triggerTarget.AbsoluteSize / 2
+    local gi = GuiService:GetGuiInset()
+    local x, y = p.X, p.Y
+    local mode = Config.InsetMode
+    if mode == "auto" then
+        local sg = triggerTarget:FindFirstAncestorOfClass("ScreenGui")
+        y = y + ((sg and sg.IgnoreGuiInset) and 0 or gi.Y)
+    elseif mode == "xy" then
+        x, y = x + gi.X, y + gi.Y
+    end
+    local cam = Workspace.CurrentCamera
+    if cam then
+        local vs = cam.ViewportSize
+        if x < 0 or y < 0 or x > vs.X or y > vs.Y then return false end
+    end
+    local trig = triggerTarget
+    trig.Active = false
+    activeToken = activeToken + 1
+    local tk = activeToken
+    task.delay(TOUCH_HOLD + 0.06, function()
+        if tk == activeToken and trig and trig.Parent then trig.Active = not Config.TrigLocked end
+    end)
+    if touchDown(x, y) then return true end
+    trig.Active = not Config.TrigLocked
+    return false
+end
+
+-- MODE TRIG   : sentuh TRIG.
+-- MODE SINYAL : fire sinyal tombol game DAN sentuh TRIG (dua-duanya).
+local function pressParryRaw()
+    local touched = false
+    if UIS.TouchEnabled then
+        touched = pressViaTrig()
+    end
+    local sig = 0
+    if Config.PressMode == "sinyal" or not UIS.TouchEnabled then
+        local b = findBtn()
+        sig = b and fireSignals(b) or 0
+    end
+    return touched or sig > 0
+end
+
+local function pressParry()
+    local ok, res = pcall(pressParryRaw)
+    if not ok then
+        AddLog("[ERROR] " .. tostring(res), C_ERR)
+        releaseTouch()
+        return false
+    end
+    return res
+end
+
+local DOWN = {"downed", "knocked", "dying", "crawl", "incap"}
+local function selfBad()
+    local ch = LocalPlayer.Character
+    if not ch then return false end
+    local hum = ch:FindFirstChildOfClass("Humanoid")
+    if hum and hum.Health <= 0 then return true end
+    if ch:GetAttribute("IsHooked") == true then return true end
+    for k, v in pairs(ch:GetAttributes()) do
+        if v == true then
+            local l = lower(k)
+            if not string.find(l, "countdown", 1, true) then
+                for _, w in ipairs(DOWN) do
+                    if string.find(l, w, 1, true) then return true end
+                end
+            end
+        end
+    end
+    return false
+end
+
+local playDone = setmetatable({}, {__mode = "k"})
+local lastTP = setmetatable({}, {__mode = "k"})
+local hooked = setmetatable({}, {__mode = "k"})
+local seenUnknown = {}
+local inArea, wasIn = false, false
+
+-- jarak jangkau: diperluas sesuai kecepatan killer dan ping
+local function reachOf(kh, flat)
+    local ping = 0
+    pcall(function() ping = LocalPlayer:GetNetworkPing() end)
+    local radius = Config.ParryRadius
+    local reach = radius
+    if flat.Magnitude > 0.5 then
+        local vel = kh.AssemblyLinearVelocity
+        local closing = Vector3.new(vel.X, 0, vel.Z):Dot(-flat.Unit)
+        if closing > 0 then
+            reach = radius + math.min(10, closing * (math.clamp(ping, 0, 0.5) + 0.3))
+        end
+    end
+    return reach
+end
+
+-- catatan: cek area berbasis JARAK (360 derajat), jadi killer di belakang tetap terdeteksi
+local function killerInArea(pl)
+    local myHrp = getHRP(LocalPlayer)
+    local ch = pl.Character
+    local kh = ch and ch:FindFirstChild("HumanoidRootPart")
+    if not (myHrp and kh) then return false end
+    local mp = myHrp.Position
+    if math.abs(kh.Position.Y - mp.Y) > 10 then return false end
+    local flat = Vector3.new(kh.Position.X - mp.X, 0, kh.Position.Z - mp.Z)
+    return flat.Magnitude <= reachOf(kh, flat)
+end
+
+-- putar karakter + kamera SEKALI menghadap killer terdekat di area (tidak mengunci, bisa langsung lari)
+local function faceKiller()
+    local myHrp = getHRP(LocalPlayer)
+    if not myHrp then return end
+    local best, bd
+    for _, pl in ipairs(Players:GetPlayers()) do
+        if pl ~= LocalPlayer and isKiller(pl) and killerInArea(pl) then
+            local kh = getHRP(pl)
+            if kh then
+                local d = (kh.Position - myHrp.Position).Magnitude
+                if not bd or d < bd then best, bd = kh, d end
+            end
+        end
+    end
+    if not best then return end
+    local mp, kp = myHrp.Position, best.Position
+    local target = Vector3.new(kp.X, mp.Y, kp.Z)
+    if (target - mp).Magnitude < 0.5 then return end
+    myHrp.CFrame = CFrame.lookAt(mp, target)
+    -- kamera ikut menghadap killer
+    if Config.FaceCamEnabled then
+        local cam = Workspace.CurrentCamera
+        if cam then
+            cam.CFrame = CFrame.lookAt(cam.CFrame.Position, kp)
+        end
+    end
+end
+
+local lastTryLog, lastFailLog = 0, 0
+local function tryParry()
+    local now = os.clock()
+    if now - lastParry < PARRY_GAP then return false end
+    if selfBad() then return false end
+    -- hadap killer dulu (juga kalau killer di belakang), baru tekan parry
+    if Config.FaceEnabled then pcall(faceKiller) end
+    if now - lastTryLog > 0.4 then
+        lastTryLog = now
+        AddLog("[PARRY] Mencoba menekan (" .. string.upper(Config.PressMode) .. ")...", C_INFO)
+    end
+    if not pressParry() then
+        if now - lastFailLog > 1 then
+            lastFailLog = now
+            AddLog("[WARN] Tekan gagal (TRIG hilang / di luar layar / tombol tidak ketemu).", C_WARN)
+        end
+        return false
+    end
+    lastParry = now
+    if Config.PressMode == "sinyal" then
+        AddLog("[PARRY] Sinyal + TRIG terkirim.", C_OK)
+    end
+    if UIS.TouchEnabled and hookedBtn then
+        local tp = tapT
+        task.delay(0.12, function()
+            if gameHitT >= tp then
+                AddLog("[TRIG] Sentuhan diterima tombol game.", C_OK)
+            elseif Config.PressMode ~= "sinyal" then
+                AddLog("[TRIG] Sentuhan TIDAK sampai ke tombol game!", C_ERR)
+            end
+        end)
+    end
+    if DOUBLE_PRESS then
+        task.spawn(function()
+            task.wait(TOUCH_HOLD + 0.01)
+            if Config.AutoParryEnabled then pressParry() end
+        end)
+    end
+    return true
+end
+
+local function handleTrack(t)
+    if t.Looped or playDone[t] then return end
+    local id = t.Animation and t.Animation.AnimationId
+    if not id then return end
+    local tp = t.TimePosition
+    if not attackAnims[id] then
+        if tp <= ANIM_MAX_TP and not seenUnknown[id] then
+            seenUnknown[id] = true
+            AddLog("[ANIM] Tak dikenal: " .. (string.match(id, "%d+") or id), C_WARN)
+        end
+        return
+    end
+    if tp > ANIM_MAX_TP then return end
+    if tryParry() then playDone[t] = true end
+end
+
+local lastErrLog = 0
+local function logErr(err)
+    local now = os.clock()
+    if now - lastErrLog > 1 then
+        lastErrLog = now
+        AddLog("[ERROR] " .. tostring(err), C_ERR)
+    end
+end
+
+local function parryStep()
+    -- penjaga: sentuhan tidak boleh nyangkut
+    if tapHeld and os.clock() - tapT > TOUCH_HOLD + 0.05 then releaseTouch("paksa") end
+    inArea = false
+    if not Config.AutoParryEnabled then wasIn = false return end
+    for _, pl in ipairs(Players:GetPlayers()) do
+        if pl ~= LocalPlayer and isKiller(pl) and pl.Character then
+            local ch = pl.Character
+            local an = ch:FindFirstChildWhichIsA("Animator", true)
+            if an and not hooked[an] then
+                hooked[an] = true
+                track(an.AnimationPlayed:Connect(function(tk)
+                    local ok, err = pcall(function()
+                        playDone[tk] = nil
+                        lastTP[tk] = 0
+                        if Config.AutoParryEnabled and killerInArea(pl) then handleTrack(tk) end
+                    end)
+                    if not ok then logErr(err) end
+                end))
+            end
+            if killerInArea(pl) then
+                inArea = true
+                local src = an or ch:FindFirstChildOfClass("Humanoid")
+                if src then
+                    for _, t in ipairs(src:GetPlayingAnimationTracks()) do
+                        local tp = t.TimePosition
+                        if tp < (lastTP[t] or 0) - 0.05 then playDone[t] = nil end
+                        lastTP[t] = tp
+                        handleTrack(t)
+                    end
+                end
+            end
+        end
+    end
+    if inArea and not wasIn then
+        AddLog("[SYS] Killer mendekat!", C_WARN)
+    end
+    wasIn = inArea
+end
+
+track(RunService.Stepped:Connect(function()
+    local ok, err = pcall(parryStep)
+    if not ok then logErr(err) end
+end))
+
+-- scan tombol game di latar belakang (dipakai mode sinyal)
+task.spawn(function()
+    while scriptRunning do
+        task.wait(1)
+        if Config.AutoParryEnabled and not usable(btnObj) then pcall(scanBtn) end
+    end
+end)
+
+------------------------------------------------ CINCIN AREA
+local RING_SEG = 40
+local ringPart, ringAtt, ringBeams, lastR, lastIn
+local ringRP = RaycastParams.new()
+ringRP.FilterType = Enum.RaycastFilterType.Exclude
+local ORANGE, RED = Color3.fromRGB(255, 140, 0), Color3.fromRGB(255, 60, 40)
+
+local function destroyRing()
+    if ringPart then ringPart:Destroy() ringPart = nil end
+end
+local function ensureRing()
+    if ringPart and ringPart.Parent then return end
+    ringAtt, ringBeams = {}, {}
+    ringPart = Instance.new("Part")
+    ringPart.Name = "ParryArea"
+    ringPart.Anchored = true
+    ringPart.CanCollide = false
+    ringPart.CanQuery = false
+    ringPart.CanTouch = false
+    ringPart.CastShadow = false
+    ringPart.Transparency = 1
+    ringPart.Size = Vector3.new(0.2, 0.2, 0.2)
+    ringPart.Parent = Workspace.CurrentCamera or Workspace
+    for i = 1, RING_SEG do
+        local a = Instance.new("Attachment")
+        a.Parent = ringPart
+        ringAtt[i] = a
+    end
+    for i = 1, RING_SEG do
+        local b = Instance.new("Beam")
+        b.Attachment0 = ringAtt[i]
+        b.Attachment1 = ringAtt[(i % RING_SEG) + 1]
+        b.FaceCamera = true
+        b.Segments = 1
+        b.Width0, b.Width1 = 0.22, 0.22
+        b.LightEmission = 1
+        b.LightInfluence = 0
+        b.Color = ColorSequence.new(ORANGE)
+        b.Transparency = NumberSequence.new(0.1)
+        b.Parent = ringPart
+        ringBeams[i] = b
+    end
+    lastR, lastIn = nil, nil
+end
+
+track(RunService.RenderStepped:Connect(function()
+    if not (Config.AutoParryEnabled and Config.AreaEnabled) then destroyRing() return end
+    local ch = LocalPlayer.Character
+    local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local ok, err = pcall(function()
+        ensureRing()
+        local radius = Config.ParryRadius
+        if radius ~= lastR then
+            lastR = radius
+            for i, a in ipairs(ringAtt) do
+                local ang = (i - 1) / RING_SEG * math.pi * 2
+                a.Position = Vector3.new(math.cos(ang) * radius, 0, math.sin(ang) * radius)
+            end
+        end
+        if inArea ~= lastIn then
+            lastIn = inArea
+            local col = inArea and RED or ORANGE
+            for _, b in ipairs(ringBeams) do b.Color = ColorSequence.new(col) end
+        end
+        ringRP.FilterDescendantsInstances = {ch, ringPart}
+        local hit = Workspace:Raycast(hrp.Position, Vector3.new(0, -12, 0), ringRP)
+        local hum = ch:FindFirstChildOfClass("Humanoid")
+        local gy = hit and hit.Position.Y or (hrp.Position.Y - (hrp.Size.Y / 2 + (hum and hum.HipHeight or 2)))
+        ringPart.CFrame = CFrame.new(hrp.Position.X, gy + 0.12, hrp.Position.Z)
+    end)
+    if not ok then logErr(err) end
+end))
+
+
+--==============================================================
+-- ESP (Killer merah, Survivor biru, Generator ungu)
+--==============================================================
+local COL_KILLER = Color3.fromRGB(255, 60, 60)
+local COL_SURV = Color3.fromRGB(64, 160, 255)
+local COL_GEN = Color3.fromRGB(150, 0, 200)
+local COL_GATE = Color3.fromRGB(255, 255, 255)
+local COL_OBJ = Color3.fromRGB(74, 255, 181)
+
+local function ESPHighlight(obj, color)
+    local h = obj:FindFirstChild("ESP_H") or Instance.new("Highlight")
+    h.Name = "ESP_H"
+    h.Adornee = obj
+    h.FillColor = color
+    h.OutlineColor = color
+    h.FillTransparency = 0.8
+    h.OutlineTransparency = 0.3
+    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    h.Parent = obj
+end
+
+local function ESPTag(parent, text, color)
+    local b = parent:FindFirstChild("ESP_T")
+    if not b then
+        b = Instance.new("BillboardGui")
+        b.Name = "ESP_T"
+        b.AlwaysOnTop = true
+        b.Size = UDim2.new(0, 120, 0, 30)
+        b.Adornee = parent
+        local l = Instance.new("TextLabel")
+        l.Name = "L"
+        l.Size = UDim2.new(1, 0, 1, 0)
+        l.BackgroundTransparency = 1
+        l.Font = Enum.Font.GothamBold
+        l.TextSize = 11
+        l.TextStrokeTransparency = 0
+        l.Parent = b
+        b.Parent = parent
+    end
+    b.L.Text = text
+    b.L.TextColor3 = color
+end
+
+local function ClearESP()
+    for _, o in ipairs(Workspace:GetDescendants()) do
+        if o.Name == "ESP_H" or o.Name == "ESP_T" then o:Destroy() end
+    end
+end
+
+local function ESPPlayers()
+    local myChar = LocalPlayer.Character
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local root = p.Character:FindFirstChild("HumanoidRootPart")
+            if root then
+                local col = isKiller(p) and COL_KILLER or COL_SURV
+                local d = myRoot and math.floor((root.Position - myRoot.Position).Magnitude) or 0
+                ESPHighlight(p.Character, col)
+                ESPTag(root, p.Name .. "\n[" .. d .. " studs]", col)
+            end
+        end
+    end
+end
+
+local function ESPObjects()
+    local map = Workspace:FindFirstChild("Map")
+    if not map then return end
+    for _, o in ipairs(map:GetDescendants()) do
+        if o.Name == "Generator" then ESPHighlight(o, COL_GEN)
+        elseif o.Name == "Gate" then ESPHighlight(o, COL_GATE)
+        elseif o.Name == "Pallet" or o.Name == "Window" then ESPHighlight(o, COL_OBJ) end
+    end
+end
+
+local lastESPP, lastESPO = 0, 0
+track(RunService.Heartbeat:Connect(function()
+    if not Config.ESPEnabled then return end
+    local t = tick()
+    pcall(function()
+        if t - lastESPP > 0.25 then lastESPP = t ESPPlayers() end
+        if t - lastESPO > 20 then lastESPO = t ESPObjects() end
+    end)
+end))
+
+--==============================================================
+-- AUTO SKILLCHECK (Yuji)
+--==============================================================
+local SKILL_TOUCH_ID = 8822
+local ActionPath = "Survivor-mob.Controls.action.check"
+local isProcessingHit = false
+
+local function getActionTarget()
+    local cur = PlayerGui
+    for seg in string.gmatch(ActionPath, "[^%.]+") do
+        cur = cur and cur:FindFirstChild(seg)
+    end
+    return cur
+end
+
+local function tapSkill()
+    local b = getActionTarget()
+    if b and b:IsA("GuiObject") then
+        local p, s, i = b.AbsolutePosition, b.AbsoluteSize, GuiService:GetGuiInset()
+        local cx, cy = p.X + (s.X / 2) + i.X, p.Y + (s.Y / 2) + i.Y
+        pcall(function()
+            VirtualInputManager:SendTouchEvent(SKILL_TOUCH_ID, 0, cx, cy)
+            task.wait(0.002)
+            VirtualInputManager:SendTouchEvent(SKILL_TOUCH_ID, 2, cx, cy)
+        end)
+    else
+        pcall(function()
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+            task.wait(0.002)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+        end)
+    end
+end
+
+local function isSurvivor()
+    local team = LocalPlayer.Team
+    local n = team and string.lower(team.Name) or ""
+    return string.find(n, "survivor", 1, true) ~= nil
+end
+
+track(RunService.Heartbeat:Connect(function()
+    if not Config.AutoSkillEnabled then isProcessingHit = false return end
+    if not isSurvivor() then return end
+    local prompt = PlayerGui:FindFirstChild("SkillCheckPromptGui")
+    local check = prompt and prompt:FindFirstChild("Check")
+    if not (check and check.Visible) then isProcessingHit = false return end
+    local line, goal = check:FindFirstChild("Line"), check:FindFirstChild("Goal")
+    if not (line and goal) then return end
+    local lr, gr = line.Rotation % 360, goal.Rotation % 360
+    local ss, se = (gr + 102) % 360, (gr + 116) % 360
+    local inZone = (ss > se and (lr >= ss or lr <= se)) or (lr >= ss and lr <= se)
+    if not inZone then isProcessingHit = false return end
+    if not isProcessingHit then
+        isProcessingHit = true
+        task.spawn(tapSkill)
+    end
+end))
+
+--==============================================================
+-- FULLBRIGHT
+--==============================================================
+local origLighting = {
+    Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient,
+    Brightness = Lighting.Brightness, ClockTime = Lighting.ClockTime,
+    GlobalShadows = Lighting.GlobalShadows, FogEnd = Lighting.FogEnd,
+}
+local function applyLight(on)
+    if on then
+        Lighting.Ambient = Color3.new(1, 1, 1)
+        Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd = 9e9
+    else
+        for k, v in pairs(origLighting) do Lighting[k] = v end
+    end
+end
+local lastLight = 0
+track(RunService.Heartbeat:Connect(function()
+    if not Config.FullbrightEnabled then return end
+    local t = tick()
+    if t - lastLight > 0.5 then lastLight = t applyLight(true) end
+end))
+
+--==============================================================
+-- NOCLIP
+--==============================================================
+track(RunService.Stepped:Connect(function()
+    if not Config.NoclipEnabled then return end
+    local ch = LocalPlayer.Character
+    if not ch then return end
+    for _, p in ipairs(ch:GetDescendants()) do
+        if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
+    end
+end))
+
+--==============================================================
+-- AUTO GENERATOR (dari panel lama)
+--==============================================================
+local GEN_RANGE = 14        -- jarak maksimal ke generator (studs)
+local GEN_INTERVAL = 0.3    -- jeda antar percobaan (detik)
+local genList, genListT, lastGen, genBusy = {}, 0, 0, false
+local lastGenState = nil
+
+local function refreshGens()
+    genListT = os.clock()
+    genList = {}
+    local map = Workspace:FindFirstChild("Map")
+    if not map then return end
+    for _, o in ipairs(map:GetDescendants()) do
+        if o.Name == "Generator" and (o:IsA("Model") or o:IsA("BasePart")) then
+            genList[#genList + 1] = o
+        end
+    end
+end
+
+local function genPos(gen)
+    if gen:IsA("Model") then
+        local ok, cf = pcall(function() return gen:GetPivot() end)
+        if ok then return cf.Position end
+    end
+    local p = gen:IsA("BasePart") and gen or gen:FindFirstChildWhichIsA("BasePart", true)
+    return p and p.Position
+end
+
+local function genPrompt(gen)
+    for _, d in ipairs(gen:GetDescendants()) do
+        if d:IsA("ProximityPrompt") and d.Enabled then return d end
+    end
+end
+
+local function nearestGen()
+    local hrp = getHRP(LocalPlayer)
+    if not hrp then return nil, math.huge end
+    if os.clock() - genListT > 5 then refreshGens() end
+    local best, bd = nil, math.huge
+    for _, g in ipairs(genList) do
+        if g.Parent then
+            local gp = genPos(g)
+            if gp then
+                local d = (gp - hrp.Position).Magnitude
+                if d < bd then best, bd = g, d end
+            end
+        end
+    end
+    return best, bd
+end
+
+local function activatePrompt(pr)
+    pcall(function() pr.HoldDuration = 0 end)
+    if fireproximityprompt then
+        local ok = pcall(fireproximityprompt, pr)
+        if ok then return true end
+    end
+    -- cadangan: simulasi tahan prompt
+    local ok = pcall(function() pr:InputHoldBegin() end)
+    if ok then
+        task.delay(0.15, function() pcall(function() pr:InputHoldEnd() end) end)
+        return true
+    end
+    return false
+end
+
+track(RunService.Heartbeat:Connect(function()
+    if not Config.GenEnabled then return end
+    if genBusy or os.clock() - lastGen < GEN_INTERVAL then return end
+    if not isSurvivor() or selfBad() then return end
+    lastGen = os.clock()
+    genBusy = true
+    local ok, err = pcall(function()
+        local g, d = nearestGen()
+        if g and d <= GEN_RANGE then
+            local pr = genPrompt(g)
+            if pr then
+                if lastGenState ~= "fire" then
+                    lastGenState = "fire"
+                    AddLog("[GEN] Memperbaiki generator (" .. math.floor(d) .. " studs).", C_OK)
+                end
+                activatePrompt(pr)
+            elseif lastGenState ~= "noprompt" then
+                lastGenState = "noprompt"
+                AddLog("[GEN] Generator dekat tapi tidak ada ProximityPrompt aktif.", C_WARN)
+            end
+        else
+            lastGenState = nil
+        end
+    end)
+    genBusy = false
+    if not ok then logErr(err) end
+end))
+
+--==============================================================
+-- DIAGNOSTIC
+--==============================================================
+diagBtn.MouseButton1Click:Connect(function()
+    local g, d = nearestGen()
+    if g then
+        local pr = genPrompt(g)
+        AddLog("Generator terdekat: " .. math.floor(d) .. " studs | prompt="
+            .. (pr and (pr.Name .. " act='" .. tostring(pr.ActionText) .. "'") or "TIDAK ADA")
+            .. " | total=" .. #genList, C_DIAG)
+    else
+        AddLog("Generator: tidak ditemukan di workspace.Map", C_DIAG)
+    end
+    AddLog("═══════ DIAGNOSTIC ═══════", C_DIAG)
+    AddLog("mode=" .. Config.PressMode .. " tapHeld=" .. tostring(tapHeld) .. " TouchEnabled=" .. tostring(UIS.TouchEnabled), C_DIAG)
+    if triggerTarget then
+        local p, s = triggerTarget.AbsolutePosition, triggerTarget.AbsoluteSize
+        AddLog("TRIG: Vis=" .. tostring(triggerTarget.Visible) .. " Act=" .. tostring(triggerTarget.Active)
+            .. " @" .. math.floor(p.X) .. "," .. math.floor(p.Y)
+            .. " (" .. math.floor(s.X) .. "x" .. math.floor(s.Y) .. ")", C_DIAG)
+    else
+        AddLog("TRIG: belum dibuat", C_ERR)
+    end
+    local b = findBtn()
+    AddLog("Tombol game '" .. BTN_NAME .. "': " .. (b and "ketemu" or "tidak ketemu"), C_DIAG)
+    AddLog("══════════════════════════", C_DIAG)
+end)
+
+--==============================================================
+-- EFEK SETELAH CONFIG DIMUAT
+--==============================================================
+local function ApplyConfigEffects()
+    if Config.ESPEnabled then lastESPO = 0 else pcall(ClearESP) end
+    if not Config.FullbrightEnabled then pcall(applyLight, false) end
+    if not Config.AutoParryEnabled then releaseTouch() end
+    if not Config.AutoSkillEnabled then isProcessingHit = false end
+    if Config.GenEnabled then refreshGens() lastGenState = nil end
+    pcall(function()
+        if triggerTarget and triggerTarget.Parent then
+            triggerTarget.Size = UDim2.fromOffset(Config.TrigSize, Config.TrigSize)
+            triggerTarget.Visible = Config.TrigShow
+            triggerTarget.Active = not Config.TrigLocked
+        end
+    end)
+end
+
+--==============================================================
+-- UI: SCALE
+--==============================================================
+local function UpdateScale()
+    if not mainScale or not mainScale.Parent then return end
+    local cam = Workspace.CurrentCamera
+    if not cam then return end
+    local vs = cam.ViewportSize
+    mainScale.Scale = math.clamp(math.min(vs.X / 680, vs.Y / 560), 0.5, 1)
+end
+
+--==============================================================
+-- UI: TRIG BUTTON (dibangun ulang otomatis kalau hilang)
+--==============================================================
+local function BuildTrig()
+    DisconnectList(trigConns)
+    trigConns = {}
+    pcall(function() TrigPosU = triggerTarget.Position end)
+    pcall(function() if TrigGui then TrigGui:Destroy() end end)
+
+    TrigGui = Instance.new("ScreenGui")
+    TrigGui.Name = "FallsDominion_TRIG"
+    TrigGui.ResetOnSpawn = false
+    TrigGui.DisplayOrder = 999
+    TrigGui.Parent = PlayerGui
+
+    -- Frame (bukan tombol) supaya Active=false benar-benar tidak menahan sentuhan
+    local btn = Instance.new("Frame")
+    btn.Name = "MobileTriggerTarget"
+    btn.Size = UDim2.fromOffset(Config.TrigSize, Config.TrigSize)
+    btn.Position = TrigPosU or UDim2.new(0.5, 0, 0.5, 0)
+    btn.AnchorPoint = Vector2.new(0.5, 0.5)
+    btn.BackgroundColor3 = Color3.fromRGB(20, 180, 110)
+    btn.BackgroundTransparency = 0.18
+    btn.BorderSizePixel = 0
+    btn.Active = not Config.TrigLocked
+    btn.ZIndex = 1000
+    btn.Visible = Config.TrigShow
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = "TRIG"
+    lbl.TextColor3 = Color3.new(1, 1, 1)
+    lbl.TextSize = 13
+    lbl.Font = Enum.Font.GothamBold
+    lbl.ZIndex = 1001
+    lbl.Parent = btn
+
+    btn.Parent = TrigGui
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
+    local s = Instance.new("UIStroke", btn)
+    s.Color = Color3.fromRGB(160, 255, 210)
+    s.Thickness = 2
+    triggerTarget = btn
+
+    local dragging, dragStart, startPos = false, nil, nil
+    trackTrig(btn.InputBegan:Connect(function(i)
+        if not Config.TrigLocked and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1) then
+            dragging, dragStart, startPos = true, i.Position, btn.Position
+        end
+    end))
+    trackTrig(UserInputService.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+            local d = i.Position - dragStart
+            btn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            TrigPosU = btn.Position
+        end
+    end))
+    trackTrig(UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end))
+end
+
+--==============================================================
+-- UI: MAIN WINDOW (dibangun ulang otomatis kalau terhapus / config dimuat)
+--==============================================================
+local function BuildMain(mainVisible, floatVisible)
+    DisconnectList(uiConns)
+    uiConns = {}
+    pcall(function() if ScreenGui then ScreenGui:Destroy() end end)
+
+    ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "FallsDominion_VD"
+    ScreenGui.ResetOnSpawn = false
+    pcall(function() ScreenGui.Parent = CoreGui end)
+    if not ScreenGui.Parent then ScreenGui.Parent = PlayerGui end
+
+    -- FLOATING PROFILE
+    FloatBtn = Instance.new("ImageButton", ScreenGui)
+    FloatBtn.Size = UDim2.new(0, 60, 0, 60)
+    FloatBtn.Position = UDim2.new(0, 20, 0.5, -30)
+    FloatBtn.BackgroundColor3 = Color3.fromRGB(255, 40, 64)
+    FloatBtn.Image = PP_ASSET or ""
+    FloatBtn.Visible = floatVisible
+    FloatBtn.ZIndex = 100
+    FloatBtn.Draggable = true
+    Instance.new("UICorner", FloatBtn).CornerRadius = UDim.new(1, 0)
+    Instance.new("UIStroke", FloatBtn).Color = Color3.fromRGB(255, 255, 255)
+
+    -- MAIN WINDOW
+    Main = Instance.new("Frame", ScreenGui)
+    Main.Size = UDim2.new(0, 620, 0, 520)
+    Main.Position = UDim2.new(0.5, -310, 0.5, -260)
+    Main.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
+    Main.BorderSizePixel = 0
+    Main.Active = true
+    Main.Draggable = true
+    Main.ClipsDescendants = true
+    Main.Visible = mainVisible
+    Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 10)
+    Instance.new("UIStroke", Main).Color = Color3.fromRGB(255, 40, 64)
+
+    mainScale = Instance.new("UIScale", Main)
+    UpdateScale()
+    if Workspace.CurrentCamera then
+        trackUI(Workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(UpdateScale))
+    end
+
+    if BG_ASSET then
+        local bg = Instance.new("ImageLabel", Main)
+        bg.Size = UDim2.new(1, 0, 1, 0)
+        bg.BackgroundTransparency = 1
+        bg.Image = BG_ASSET
+        bg.ScaleType = Enum.ScaleType.Crop
+        bg.ImageTransparency = 0.6
+        bg.ZIndex = 0
+        Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 10)
+    end
+
+    -- HEADER
+    local Header = Instance.new("Frame", Main)
+    Header.Size = UDim2.new(1, 0, 0, 50)
+    Header.BackgroundTransparency = 1
+    Header.ZIndex = 2
+
+    local HeaderPP = Instance.new("ImageLabel", Header)
+    HeaderPP.Size = UDim2.new(0, 35, 0, 35)
+    HeaderPP.Position = UDim2.new(0, 10, 0.5, -17.5)
+    HeaderPP.BackgroundColor3 = Color3.fromRGB(255, 40, 64)
+    HeaderPP.Image = PP_ASSET or ""
+    HeaderPP.ZIndex = 3
+    Instance.new("UICorner", HeaderPP).CornerRadius = UDim.new(1, 0)
+
+    local Title = Instance.new("TextLabel", Header)
+    Title.Size = UDim2.new(0, 420, 1, 0)
+    Title.Position = UDim2.new(0, 55, 0, 0)
+    Title.BackgroundTransparency = 1
+    Title.Text = "FALL'S DOMINION | VD"
+    Title.TextColor3 = Color3.fromRGB(255, 40, 64)
+    Title.Font = Enum.Font.GothamBlack
+    Title.TextSize = 22
+    Title.TextXAlignment = Enum.TextXAlignment.Left
+    Title.ZIndex = 3
+
+    local CloseBtn = Instance.new("TextButton", Header)
+    CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+    CloseBtn.Position = UDim2.new(1, -40, 0.5, -15)
+    CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 40, 64)
+    CloseBtn.Text = "X"
+    CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    CloseBtn.Font = Enum.Font.GothamBold
+    CloseBtn.ZIndex = 3
+    Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
+
+    -- POPUP CLOSE
+    local Popup = Instance.new("Frame", Main)
+    Popup.Size = UDim2.new(0, 280, 0, 120)
+    Popup.Position = UDim2.new(0.5, -140, 0.5, -60)
+    Popup.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+    Popup.Visible = false
+    Popup.ZIndex = 999
+    Instance.new("UICorner", Popup).CornerRadius = UDim.new(0, 10)
+    Instance.new("UIStroke", Popup).Color = Color3.fromRGB(255, 40, 64)
+
+    local PopupText = Instance.new("TextLabel", Popup)
+    PopupText.Size = UDim2.new(1, 0, 0, 50)
+    PopupText.BackgroundTransparency = 1
+    PopupText.Text = "Ingin keluar dari script ini?"
+    PopupText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    PopupText.Font = Enum.Font.GothamBold
+    PopupText.ZIndex = 1000
+
+    local CancelBtn = Instance.new("TextButton", Popup)
+    CancelBtn.Size = UDim2.new(0, 110, 0, 30)
+    CancelBtn.Position = UDim2.new(0, 20, 0, 70)
+    CancelBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+    CancelBtn.Text = "CANCEL"
+    CancelBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    CancelBtn.ZIndex = 1000
+    Instance.new("UICorner", CancelBtn).CornerRadius = UDim.new(0, 6)
+
+    local CloseWinBtn = Instance.new("TextButton", Popup)
+    CloseWinBtn.Size = UDim2.new(0, 110, 0, 30)
+    CloseWinBtn.Position = UDim2.new(1, -130, 0, 70)
+    CloseWinBtn.BackgroundColor3 = Color3.fromRGB(255, 40, 64)
+    CloseWinBtn.Text = "CLOSE UI"
+    CloseWinBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    CloseWinBtn.ZIndex = 1000
+    Instance.new("UICorner", CloseWinBtn).CornerRadius = UDim.new(0, 6)
+
+    local mainRef, floatRef = Main, FloatBtn
+    CloseBtn.MouseButton1Click:Connect(function() Popup.Visible = true end)
+    CancelBtn.MouseButton1Click:Connect(function() Popup.Visible = false end)
+    CloseWinBtn.MouseButton1Click:Connect(function()
+        Popup.Visible = false
+        mainRef.Visible = false
+        floatRef.Visible = true
+    end)
+    FloatBtn.MouseButton1Click:Connect(function()
+        mainRef.Visible = true
+        floatRef.Visible = false
+    end)
+
+    -- TAB SYSTEM
+    local TabFrame = Instance.new("Frame", Main)
+    TabFrame.Size = UDim2.new(0, 120, 1, -70)
+    TabFrame.Position = UDim2.new(0, 10, 0, 60)
+    TabFrame.BackgroundTransparency = 1
+    Instance.new("UIListLayout", TabFrame).Padding = UDim.new(0, 5)
+
+    local ContentFrame = Instance.new("ScrollingFrame", Main)
+    ContentFrame.Size = UDim2.new(1, -145, 1, -70)
+    ContentFrame.Position = UDim2.new(0, 135, 0, 60)
+    ContentFrame.BackgroundTransparency = 1
+    ContentFrame.BorderSizePixel = 0
+    ContentFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    ContentFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    ContentFrame.ScrollBarThickness = 3
+    ContentFrame.ScrollBarImageColor3 = Color3.fromRGB(255, 40, 64)
+    Instance.new("UIListLayout", ContentFrame).Padding = UDim.new(0, 5)
+
+    local Tabs = {}
+    local function RegisterTab(name)
+        local btn = Instance.new("TextButton", TabFrame)
+        btn.Size = UDim2.new(1, 0, 0, 30)
+        btn.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+        btn.Text = name
+        btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 11
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 5)
+
+        local page = Instance.new("Frame", ContentFrame)
+        page.Size = UDim2.new(1, 0, 0, 0)
+        page.AutomaticSize = Enum.AutomaticSize.Y
+        page.BackgroundTransparency = 1
+        page.Visible = false
+        Instance.new("UIListLayout", page).Padding = UDim.new(0, 5)
+
+        Tabs[name] = {Button = btn, Page = page}
+        btn.MouseButton1Click:Connect(function()
+            for _, tab in pairs(Tabs) do
+                tab.Page.Visible = false
+                tab.Button.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+                tab.Button.TextColor3 = Color3.fromRGB(200, 200, 200)
+            end
+            page.Visible = true
+            btn.BackgroundColor3 = Color3.fromRGB(255, 40, 64)
+            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        end)
+        return page
+    end
+
+    -- UI HELPERS
+    local function Section(parent, text)
+        local lbl = Instance.new("TextLabel", parent)
+        lbl.Size = UDim2.new(1, -10, 0, 20)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = "--- " .. text .. " ---"
+        lbl.TextColor3 = Color3.fromRGB(140, 50, 255)
+        lbl.Font = Enum.Font.GothamBold
+        lbl.TextSize = 11
+    end
+
+    local function InfoLabel(parent, text, height)
+        local lbl = Instance.new("TextLabel", parent)
+        lbl.Size = UDim2.new(1, -10, 0, height or 45)
+        lbl.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+        lbl.Text = text
+        lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 11
+        lbl.TextWrapped = true
+        Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 5)
+        return lbl
+    end
+
+    local function Toggle(parent, text, default, callback)
+        local btn = Instance.new("TextButton", parent)
+        btn.Size = UDim2.new(1, -10, 0, 30)
+        btn.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+        btn.Text = " [OFF] " .. text
+        btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 11
+        btn.TextXAlignment = Enum.TextXAlignment.Left
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 5)
+
+        local state = default
+        local function paint()
+            btn.Text = state and (" [ON] " .. text) or (" [OFF] " .. text)
+            btn.BackgroundColor3 = state and Color3.fromRGB(140, 50, 255) or Color3.fromRGB(25, 25, 35)
+            btn.TextColor3 = state and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200)
+        end
+        paint()
+
+        btn.MouseButton1Click:Connect(function()
+            state = not state
+            paint()
+            ShowToast("Fitur Diubah", text .. ": " .. (state and "ON" or "OFF"))
+            callback(state)
+        end)
+    end
+
+    local function MakeBtn(parent, text, callback, silent)
+        local btn = Instance.new("TextButton", parent)
+        btn.Size = UDim2.new(1, -10, 0, 30)
+        btn.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+        btn.Text = text
+        btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 11
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 5)
+        btn.MouseButton1Click:Connect(function()
+            if not silent then ShowToast("Tombol Ditekan", text) end
+            callback()
+        end)
+    end
+
+    ----------------------------------------------------------
+    -- TAB: HOME
+    ----------------------------------------------------------
+    local HomePage = RegisterTab("HOME")
+    Section(HomePage, "CREATOR")
+
+    local card = Instance.new("Frame", HomePage)
+    card.Size = UDim2.new(1, -10, 0, 110)
+    card.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
+    do
+        local st = Instance.new("UIStroke", card)
+        st.Color = Color3.fromRGB(140, 50, 255)
+        st.Thickness = 1
+    end
+
+    local pic = Instance.new("ImageLabel", card)
+    pic.Size = UDim2.new(0, 84, 0, 84)
+    pic.Position = UDim2.new(0, 14, 0.5, -42)
+    pic.BackgroundColor3 = Color3.fromRGB(255, 40, 64)
+    pic.Image = CREATOR_ASSET or ""
+    pic.ScaleType = Enum.ScaleType.Crop
+    Instance.new("UICorner", pic).CornerRadius = UDim.new(1, 0)
+    do
+        local st = Instance.new("UIStroke", pic)
+        st.Color = Color3.fromRGB(255, 40, 64)
+        st.Thickness = 2
+    end
+
+    local byLbl = Instance.new("TextLabel", card)
+    byLbl.Size = UDim2.new(1, -120, 0, 36)
+    byLbl.Position = UDim2.new(0, 112, 0, 24)
+    byLbl.BackgroundTransparency = 1
+    byLbl.Text = "Created by: Fall"
+    byLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+    byLbl.Font = Enum.Font.GothamBlack
+    byLbl.TextSize = 24
+    byLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local subLbl = Instance.new("TextLabel", card)
+    subLbl.Size = UDim2.new(1, -120, 0, 18)
+    subLbl.Position = UDim2.new(0, 112, 0, 62)
+    subLbl.BackgroundTransparency = 1
+    subLbl.Text = "FALL'S DOMINION | VD"
+    subLbl.TextColor3 = Color3.fromRGB(140, 50, 255)
+    subLbl.Font = Enum.Font.GothamBold
+    subLbl.TextSize = 12
+    subLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    Section(HomePage, "WELCOME")
+    InfoLabel(HomePage, "Selamat datang di FALL'S DOMINION!\nAuto Parry (TRIG), Auto Skillcheck, ESP, Fullbright, Noclip.", 50)
+
+    Section(HomePage, "SAVE CONFIG")
+    MakeBtn(HomePage, "SIMPAN SETTINGAN", function()
+        local ok, err = SaveConfig()
+        if ok then ShowToast("Tersimpan", "Disimpan ke " .. CONFIG_FILE)
+        else ShowToast("Gagal Simpan", tostring(err)) end
+    end, true)
+    MakeBtn(HomePage, "LOAD SETTINGAN", function()
+        local ok, err = LoadConfig()
+        if not ok then ShowToast("Gagal Load", tostring(err)) return end
+        ApplyConfigEffects()
+        task.defer(function()
+            if TrigPosU and triggerTarget and triggerTarget.Parent then triggerTarget.Position = TrigPosU end
+            local mv, fv = true, false
+            pcall(function() mv, fv = Main.Visible, FloatBtn.Visible end)
+            BuildMain(mv, fv)
+            ShowToast("Dimuat", "Settingan dari " .. CONFIG_FILE)
+        end)
+    end, true)
+    InfoLabel(HomePage, "Settingan terakhir yang disimpan otomatis dimuat saat script dijalankan.", 40)
+
+    ----------------------------------------------------------
+    -- TAB: PARRY
+    ----------------------------------------------------------
+    local function Stepper(parent, label, get, set, minV, maxV, step)
+        local row = Instance.new("Frame", parent)
+        row.Size = UDim2.new(1, -10, 0, 30)
+        row.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+        Instance.new("UICorner", row).CornerRadius = UDim.new(0, 5)
+        local lbl = Instance.new("TextLabel", row)
+        lbl.Size = UDim2.new(1, -80, 1, 0)
+        lbl.Position = UDim2.new(0, 8, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 11
+        lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        local function paint() lbl.Text = label .. ": " .. get() end
+        paint()
+        local function mk(text, x, delta)
+            local b = Instance.new("TextButton", row)
+            b.Size = UDim2.new(0, 28, 0, 22)
+            b.Position = UDim2.new(1, x, 0.5, -11)
+            b.BackgroundColor3 = Color3.fromRGB(255, 40, 64)
+            b.Text = text
+            b.TextColor3 = Color3.fromRGB(255, 255, 255)
+            b.Font = Enum.Font.GothamBold
+            b.TextSize = 16
+            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+            b.MouseButton1Click:Connect(function()
+                set(math.clamp(get() + delta, minV, maxV))
+                paint()
+            end)
+        end
+        mk("-", -66, -step)
+        mk("+", -34, step)
+    end
+
+    local function ActionBtn(parent, getText, onClick)
+        local b = Instance.new("TextButton", parent)
+        b.Size = UDim2.new(1, -10, 0, 30)
+        b.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+        b.TextColor3 = Color3.fromRGB(255, 255, 255)
+        b.Font = Enum.Font.Gotham
+        b.TextSize = 11
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+        local function paint() b.Text = getText() end
+        paint()
+        b.MouseButton1Click:Connect(function() onClick() paint() end)
+    end
+
+    local ParryPage = RegisterTab("PARRY")
+    Section(ParryPage, "AUTO PARRY")
+    Toggle(ParryPage, "AUTO PARRY", Config.AutoParryEnabled, function(v)
+        Config.AutoParryEnabled = v
+        AddLog("[SYS] Auto Parry " .. (v and "ON" or "OFF"), v and C_OK or C_WARN)
+        if v then task.spawn(function() pcall(scanBtn) end) else releaseTouch() end
+    end)
+    Stepper(ParryPage, "RADIUS", function() return Config.ParryRadius end,
+        function(v) Config.ParryRadius = v end, 4, 40, 1)
+    Toggle(ParryPage, "AREA", Config.AreaEnabled, function(v) Config.AreaEnabled = v end)
+    Toggle(ParryPage, "AUTO FACE (karakter)", Config.FaceEnabled, function(v)
+        Config.FaceEnabled = v
+        AddLog("[SYS] Auto Face " .. (v and "ON" or "OFF"), v and C_OK or C_WARN)
+    end)
+    Toggle(ParryPage, "FACE KAMERA", Config.FaceCamEnabled, function(v)
+        Config.FaceCamEnabled = v
+        AddLog("[SYS] Face Kamera " .. (v and "ON" or "OFF"), v and C_OK or C_WARN)
+    end)
+
+    Section(ParryPage, "TRIG")
+    ActionBtn(ParryPage, function()
+        return "MODE TEKAN: " .. string.upper(Config.PressMode) .. (Config.PressMode == "sinyal" and " (+TRIG)" or "")
+    end, function()
+        releaseTouch()
+        Config.PressMode = (Config.PressMode == "trig") and "sinyal" or "trig"
+        AddLog("[SYS] Mode tekan: " .. string.upper(Config.PressMode)
+            .. (Config.PressMode == "sinyal" and " (sinyal + TRIG)" or " (TRIG)"), C_INFO)
+        if Config.PressMode == "sinyal" then task.spawn(function() pcall(scanBtn) end) end
+    end)
+    Toggle(ParryPage, "TRIG BTN", Config.TrigShow, function(v)
+        Config.TrigShow = v
+        if triggerTarget then triggerTarget.Visible = v end
+    end)
+    Stepper(ParryPage, "TRIG SIZE", function() return Config.TrigSize end, function(v)
+        Config.TrigSize = v
+        if triggerTarget then triggerTarget.Size = UDim2.fromOffset(v, v) end
+    end, 24, 160, 4)
+    MakeBtn(ParryPage, "RESET POSISI TRIG", function()
+        TrigPosU = UDim2.new(0.5, 0, 0.5, 0)
+        if triggerTarget then triggerTarget.Position = TrigPosU end
+    end)
+    Toggle(ParryPage, "KUNCI TRIG", Config.TrigLocked, function(v)
+        Config.TrigLocked = v
+        if triggerTarget then triggerTarget.Active = not v end
+        AddLog("[SYS] TRIG " .. (v and "dikunci (tap tembus ke game)" or "bisa di-drag"), C_INFO)
+    end)
+    MakeBtn(ParryPage, "TEST TRIG", function()
+        logVisible = true
+        applyLogVisibility()
+        task.spawn(function()
+            if not triggerTarget then AddLog("[TEST] TRIG belum dibuat.", C_ERR) return end
+            local b = findBtn()
+            if not b then AddLog("[TEST] Tombol game tidak ketemu.", C_ERR) return end
+            hookGameBtn(b)
+            local bp = b.AbsolutePosition + b.AbsoluteSize / 2
+            local tp = triggerTarget.AbsolutePosition + triggerTarget.AbsoluteSize / 2
+            AddLog("[TEST] Tombol game @" .. math.floor(bp.X) .. "," .. math.floor(bp.Y)
+                .. " | TRIG @" .. math.floor(tp.X) .. "," .. math.floor(tp.Y), C_DIAG)
+            local t = os.clock()
+            local ok, r = pcall(pressViaTrig)
+            task.wait(0.25)
+            if not (ok and r) then
+                AddLog("[TEST] Tekan gagal (TRIG di luar layar / hilang).", C_ERR)
+            elseif gameHitT >= t then
+                AddLog("[TEST] OK: tombol game menerima sentuhan TRIG.", C_OK)
+            else
+                AddLog("[TEST] Sentuhan terkirim tapi TIDAK sampai ke tombol game. Pastikan TRIG tepat di atas tombol, coba KUNCI TRIG atau ganti OFFSET TAP.", C_ERR)
+            end
+        end)
+    end, true)
+    ActionBtn(ParryPage, function() return "OFFSET TAP: " .. string.upper(Config.InsetMode) end, function()
+        Config.InsetMode = (Config.InsetMode == "auto") and "nol" or ((Config.InsetMode == "nol") and "xy" or "auto")
+        AddLog("[SYS] Offset tap: " .. string.upper(Config.InsetMode), C_INFO)
+    end)
+    InfoLabel(ParryPage, "Drag tombol TRIG (hijau) ke atas tombol parry di game, lalu nyalakan AUTO PARRY. Tombol LOG (kanan bawah) untuk melihat log.", 55)
+
+    ----------------------------------------------------------
+    -- TAB: SURVIVOR
+    ----------------------------------------------------------
+    local SurvivorPage = RegisterTab("SURVIVOR")
+    Section(SurvivorPage, "AUTO SURVIVOR")
+    Toggle(SurvivorPage, "Auto Skillcheck", Config.AutoSkillEnabled, function(v)
+        Config.AutoSkillEnabled = v
+        if not v then isProcessingHit = false end
+    end)
+    Toggle(SurvivorPage, "AUTO GEN", Config.GenEnabled, function(v)
+        Config.GenEnabled = v
+        AddLog("[SYS] Auto Generator " .. (v and "ON" or "OFF"), v and C_OK or C_WARN)
+        if v then refreshGens() lastGenState = nil end
+    end)
+
+    ----------------------------------------------------------
+    -- TAB: VISUAL
+    ----------------------------------------------------------
+    local VisualPage = RegisterTab("VISUAL")
+    Section(VisualPage, "VISUAL")
+    Toggle(VisualPage, "ESP (Killer / Survivor / Generator)", Config.ESPEnabled, function(v)
+        Config.ESPEnabled = v
+        if v then lastESPO = 0 else pcall(ClearESP) end
+    end)
+    Toggle(VisualPage, "Fullbright", Config.FullbrightEnabled, function(v)
+        Config.FullbrightEnabled = v
+        if not v then applyLight(false) end
+    end)
+    Toggle(VisualPage, "Noclip", Config.NoclipEnabled, function(v) Config.NoclipEnabled = v end)
+
+    -- INIT TAB
+    Tabs["HOME"].Page.Visible = true
+    Tabs["HOME"].Button.BackgroundColor3 = Color3.fromRGB(255, 40, 64)
+    Tabs["HOME"].Button.TextColor3 = Color3.fromRGB(255, 255, 255)
+end
+
+BuildTrig()
+BuildMain(true, false)
+
+
+--==============================================================
+-- ANTI "MATI": RESPAWN / PINDAH MAP / GUI TERHAPUS
+--==============================================================
+local function EnsureAlive()
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if pg then PlayerGui = pg end
+
+    -- TRIG: bangun ulang kalau terhapus / PlayerGui diganti / disembunyikan
+    local trigOk = TrigGui and TrigGui.Parent == PlayerGui and triggerTarget and triggerTarget.Parent == TrigGui
+    if not trigOk then
+        BuildTrig()
+    else
+        if not TrigGui.Enabled then TrigGui.Enabled = true end
+        if triggerTarget.Visible ~= Config.TrigShow then
+            triggerTarget.Visible = Config.TrigShow
+        end
+    end
+
+    if dbgGui and dbgGui.Parent ~= PlayerGui then
+        pcall(function() dbgGui.Parent = PlayerGui end)
+    end
+
+    -- MAIN GUI: pasang ulang / bangun ulang kalau terhapus
+    if not ScreenGui or not ScreenGui.Parent then
+        local ok = pcall(function() ScreenGui.Parent = CoreGui end)
+        if not ok or not ScreenGui.Parent then
+            local mv, fv = true, false
+            pcall(function() mv, fv = Main.Visible, FloatBtn.Visible end)
+            BuildMain(mv, fv)
+        end
+    elseif ScreenGui.Enabled == false then
+        ScreenGui.Enabled = true
+    end
+
+    UpdateScale()
+end
+
+track(LocalPlayer.CharacterAdded:Connect(function()
+    releaseTouch()
+    lastParry = 0
+    inArea, wasIn = false, false
+    task.defer(function() pcall(EnsureAlive) end)
+end))
+
+track(LocalPlayer.ChildAdded:Connect(function(c)
+    if c:IsA("PlayerGui") then
+        task.defer(function() pcall(EnsureAlive) end)
+    end
+end))
+
+task.spawn(function()
+    while scriptRunning do
+        task.wait(0.5)
+        pcall(EnsureAlive)
+    end
+end)
+
+--==============================================================
+-- CLEANUP (dipanggil otomatis saat script dijalankan ulang)
+--==============================================================
+G.MengDaggerCleanup = function()
+    scriptRunning = false
+    pcall(releaseTouch)
+    DisconnectList(allConns)
+    DisconnectList(uiConns)
+    DisconnectList(trigConns)
+    allConns, uiConns, trigConns = {}, {}, {}
+    pcall(destroyRing)
+    pcall(ClearESP)
+    pcall(applyLight, false)
+    pcall(function() ScreenGui:Destroy() end)
+    pcall(function() TrigGui:Destroy() end)
+    pcall(function() dbgGui:Destroy() end)
+end
+
+--==============================================================
+-- START
+--==============================================================
+ApplyConfigEffects()
+ShowToast("FALL'S DOMINION Loaded", autoLoaded and "Settingan terakhir dimuat!" or "Siap Digunakan!")
+print("[Fall's Dominion] Loaded | Parry + Skillcheck + ESP + Fullbright + Noclip + Save Config")
